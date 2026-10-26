@@ -5,7 +5,6 @@ from typing import Any, Dict
 
 import streamlit as st
 from google import genai
-from google.genai import types
 
 from prompts import (
     PLANNER_PROMPT,
@@ -80,17 +79,15 @@ def extract_json(text: str) -> Any:
 
 
 def call_gemini(client: genai.Client, model: str, system_prompt: str, user_payload: Dict[str, Any]) -> str:
-    """Call Gemini and request structured JSON output."""
-    response = client.models.generate_content(
+    """Call Gemini through the Interactions API and request JSON output."""
+    response = client.interactions.create(
         model=model,
-        contents=json.dumps(user_payload, ensure_ascii=False, indent=2),
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=0.2,
-            response_mime_type="application/json",
-        ),
+        input=json.dumps(user_payload, ensure_ascii=False, indent=2),
+        system_instruction=system_prompt,
+        generation_config={"temperature": 0.2},
+        response_format={"type": "text", "mime_type": "application/json"},
     )
-    content = response.text
+    content = response.output_text
     if not content:
         raise ValueError("Gemini returned an empty response. Try again or check the model/API key.")
     return content
@@ -216,7 +213,7 @@ if generate:
         "learning_style": learning_style,
         "include_resource_suggestions": include_resources,
     }
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
     try:
         client = genai.Client(api_key=api_key)
