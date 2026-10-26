@@ -42,20 +42,43 @@ def extract_json(text: str) -> Any:
     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s*```$", "", cleaned)
     try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError as first_error:
+        # Some responses include a short preamble despite the JSON-only prompt.
         start = cleaned.find("{")
         end = cleaned.rfind("}")
         if start >= 0 and end > start:
-            return json.loads(cleaned[start : end + 1])
-        raise ValueError("The model did not return valid JSON.")
+            candidate = cleaned[start : end + 1]
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError as exc:
+                context_start = max(0, exc.pos - 180)
+                context_end = min(len(candidate), exc.pos + 180)
+                excerpt = candidate[context_start:context_end]
+                raise ValueError(
+                    f"The model returned malformed JSON at line {exc.lineno}, "
+                    f"column {exc.colno}: {exc.msg}. Near the error: {excerpt}"
+                ) from exc
+        else:
+            context_start = max(0, first_error.pos - 180)
+            context_end = min(len(cleaned), first_error.pos + 180)
+            excerpt = cleaned[context_start:context_end]
+            raise ValueError(
+                f"The model did not return valid JSON. Near the error: {excerpt}"
+            ) from first_error
+
+    if not isinstance(parsed, (dict, list)):
+        raise ValueError("The model returned JSON, but it was not an object or array.")
+    return parsed
 
 
 def call_groq(client: Groq, model: str, system_prompt: str, user_payload: Dict[str, Any]) -> str:
     """Call Groq and return the assistant text."""
     response = client.chat.completions.create(
         model=model,
-        temperature=0.3,
+        temperature=0.2,
+        # Ask Groq to enforce JSON output instead of relying on prompt text alone.
+        response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": system_prompt},
             {
