@@ -4,7 +4,8 @@ import re
 from typing import Any, Dict
 
 import streamlit as st
-from groq import Groq
+from google import genai
+from google.genai import types
 
 from prompts import (
     PLANNER_PROMPT,
@@ -28,12 +29,18 @@ st.write(
 
 
 def get_api_key() -> str:
-    """Read the API key from Streamlit secrets or an environment variable."""
-    try:
-        secret_key = st.secrets.get("GROQ_API_KEY", "")
-    except Exception:
-        secret_key = ""
-    return secret_key or os.getenv("GROQ_API_KEY", "")
+    """Read a Google AI Studio Gemini API key from Streamlit secrets or env."""
+    for key_name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        try:
+            secret_key = st.secrets.get(key_name, "")
+        except Exception:
+            secret_key = ""
+        if secret_key:
+            return secret_key
+        env_key = os.getenv(key_name, "")
+        if env_key:
+            return env_key
+    return ""
 
 
 def extract_json(text: str) -> Any:
@@ -72,29 +79,25 @@ def extract_json(text: str) -> Any:
     return parsed
 
 
-def call_groq(client: Groq, model: str, system_prompt: str, user_payload: Dict[str, Any]) -> str:
-    """Call Groq and return the assistant text."""
-    response = client.chat.completions.create(
+def call_gemini(client: genai.Client, model: str, system_prompt: str, user_payload: Dict[str, Any]) -> str:
+    """Call Gemini and request structured JSON output."""
+    response = client.models.generate_content(
         model=model,
-        temperature=0.2,
-        # Ask Groq to enforce JSON output instead of relying on prompt text alone.
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": json.dumps(user_payload, ensure_ascii=False, indent=2),
-            },
-        ],
+        contents=json.dumps(user_payload, ensure_ascii=False, indent=2),
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=0.2,
+            response_mime_type="application/json",
+        ),
     )
-    content = response.choices[0].message.content
+    content = response.text
     if not content:
-        raise ValueError("The model returned an empty response.")
+        raise ValueError("Gemini returned an empty response. Try again or check the model/API key.")
     return content
 
 
 def run_stage(
-    client: Groq,
+    client: genai.Client,
     model: str,
     stage_name: str,
     system_prompt: str,
@@ -103,7 +106,7 @@ def run_stage(
     """Run one workflow stage, parse its JSON output, and show progress."""
     with st.status(f"{stage_name}...", expanded=True) as status:
         try:
-            raw = call_groq(client, model, system_prompt, payload)
+            raw = call_gemini(client, model, system_prompt, payload)
             parsed = extract_json(raw)
             status.update(label=f"{stage_name} complete", state="complete")
             return parsed
@@ -113,7 +116,7 @@ def run_stage(
 
 
 def generate_study_pack(
-    client: Groq,
+    client: genai.Client,
     model: str,
     learner: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -199,8 +202,8 @@ if generate:
     api_key = get_api_key()
     if not api_key:
         st.error(
-            "Groq API key not found. Set GROQ_API_KEY in your environment "
-            "or add it to Streamlit secrets."
+            "Google AI Studio API key not found. Set GEMINI_API_KEY in your environment "
+            "or add it to Streamlit secrets (GOOGLE_API_KEY also works)."
         )
         st.stop()
 
@@ -213,10 +216,10 @@ if generate:
         "learning_style": learning_style,
         "include_resource_suggestions": include_resources,
     }
-    model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     try:
-        client = Groq(api_key=api_key)
+        client = genai.Client(api_key=api_key)
         with st.spinner("Building your personalized study pack..."):
             pack = generate_study_pack(client, model, learner)
 
@@ -225,8 +228,8 @@ if generate:
         st.success("Your study pack is ready.")
     except Exception as exc:
         st.error(
-            "The workflow could not finish. Check your API key, model name, "
-            "internet connection, and Groq usage limits, then try again."
+            "The workflow could not finish. Check your Google AI Studio API key, "
+            "Gemini model name, internet connection, and API quota, then try again."
         )
         with st.expander("Technical details"):
             st.code(str(exc))
