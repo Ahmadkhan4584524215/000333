@@ -52,7 +52,6 @@ def extract_json(text: str) -> Any:
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError as first_error:
-        # Some responses include a short preamble despite the JSON-only prompt.
         start = cleaned.find("{")
         end = cleaned.rfind("}")
         if start >= 0 and end > start:
@@ -90,8 +89,6 @@ def call_gemini(client: genai.Client, model: str, system_prompt: str, user_paylo
         "response_format": {"type": "text", "mime_type": "application/json"},
     }
 
-    # Google can temporarily return 503 (overloaded) or 429 (rate limited).
-    # Retry a few times with exponential backoff before failing the workflow.
     max_attempts = 4
     for attempt in range(max_attempts):
         try:
@@ -196,7 +193,6 @@ def generate_study_pack(
                 "review": review,
             },
         )
-        # Keep the intermediate outputs visible in the exported artifact too.
         final_pack.setdefault("learner_profile", learner)
         final_pack.setdefault("review", review)
         final_pack.setdefault("refinement", {"performed": True})
@@ -276,29 +272,75 @@ if generate:
         with st.expander("Technical details"):
             st.code(str(exc))
 
+
+def display_as_markdown(data: Any, level: int = 0):
+    """Recursively render dictionaries, lists, and strings into clean markdown text."""
+    if isinstance(data, dict):
+        for k, v in data.items():
+            title = str(k).replace("_", " ").title()
+            if isinstance(v, (dict, list)):
+                st.markdown(f"{'  ' * level}* **{title}:**")
+                display_as_markdown(v, level + 1)
+            else:
+                st.markdown(f"{'  ' * level}* **{title}:** {v}")
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, (dict, list)):
+                display_as_markdown(item, level + 1)
+                st.markdown("---")
+            else:
+                st.markdown(f"{'  ' * level}* {item}")
+    else:
+        st.markdown(f"{'  ' * level}{data}")
+
+
 if "study_pack" in st.session_state:
     pack = st.session_state["study_pack"]
     st.subheader(f"Study pack: {st.session_state.get('study_pack_field', 'Your subject')}")
 
     tabs = st.tabs(["Overview", "Learning plan", "Study content", "Assessment", "Review", "Raw JSON"])
+    
     with tabs[0]:
-        st.markdown("### Learner profile")
-        st.json(pack.get("learner_profile", {}))
+        st.markdown("### Learner Profile")
+        profile = pack.get("learner_profile", {})
+        for k, v in profile.items():
+            st.markdown(f"- **{k.replace('_', ' ').title()}:** {v}")
+            
         if pack.get("plan"):
-            st.markdown("### Plan summary")
-            st.json(pack["plan"])
+            st.markdown("### Plan Summary")
+            plan_summary = pack["plan"]
+            if isinstance(plan_summary, dict):
+                for k, v in plan_summary.items():
+                    if not isinstance(v, (dict, list)):
+                        st.markdown(f"- **{k.replace('_', ' ').title()}:** {v}")
+                if "learning_objectives" in plan_summary:
+                    st.markdown("**Learning Objectives:**")
+                    for obj in plan_summary["learning_objectives"]:
+                        st.markdown(f"- {obj}")
+
     with tabs[1]:
-        plan = pack.get("plan", {})
-        st.json(plan)
+        st.markdown("### Learning Plan")
+        display_as_markdown(pack.get("plan", {}))
+
     with tabs[2]:
-        st.json(pack.get("content", {}))
+        st.markdown("### Study Content")
+        display_as_markdown(pack.get("content", {}))
+
     with tabs[3]:
-        st.json(pack.get("assessment", {}))
+        st.markdown("### Assessment")
+        display_as_markdown(pack.get("assessment", {}))
+
     with tabs[4]:
-        st.json(pack.get("review", {}))
+        st.markdown("### Review & Refinement")
+        display_as_markdown(pack.get("review", {}))
         if pack.get("refinement"):
-            st.markdown("### Refinement")
-            st.json(pack["refinement"])
+            st.markdown("---")
+            st.markdown("### Refinement Details")
+            display_as_markdown(pack["refinement"])
+
+    with tabs[5]:
+        st.markdown("### Raw JSON Data")
+        st.json(pack)
 
     json_text = json.dumps(pack, ensure_ascii=False, indent=2)
     st.download_button(
