@@ -1,2 +1,2 @@
-streamlit>=1.36.0
-google-genai>=1.0.0
+treamlit>=1.36.0
+google-genai>=1.30.0
