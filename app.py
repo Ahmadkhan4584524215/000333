@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import time
+import random
 from typing import Any, Dict
 
 import streamlit as st
@@ -79,18 +81,48 @@ def extract_json(text: str) -> Any:
 
 
 def call_gemini(client: genai.Client, model: str, system_prompt: str, user_payload: Dict[str, Any]) -> str:
-    """Call Gemini through the Interactions API and request JSON output."""
-    response = client.interactions.create(
-        model=model,
-        input=json.dumps(user_payload, ensure_ascii=False, indent=2),
-        system_instruction=system_prompt,
-        generation_config={"temperature": 0.2},
-        response_format={"type": "text", "mime_type": "application/json"},
-    )
-    content = response.output_text
-    if not content:
-        raise ValueError("Gemini returned an empty response. Try again or check the model/API key.")
-    return content
+    """Call Gemini through the Interactions API, retrying temporary service errors."""
+    request = {
+        "model": model,
+        "input": json.dumps(user_payload, ensure_ascii=False, indent=2),
+        "system_instruction": system_prompt,
+        "generation_config": {"temperature": 0.2},
+        "response_format": {"type": "text", "mime_type": "application/json"},
+    }
+
+    # Google can temporarily return 503 (overloaded) or 429 (rate limited).
+    # Retry a few times with exponential backoff before failing the workflow.
+    max_attempts = 4
+    for attempt in range(max_attempts):
+        try:
+            response = client.interactions.create(**request)
+            content = response.output_text
+            if not content:
+                raise ValueError("Gemini returned an empty response. Try again or check the model/API key.")
+            return content
+        except Exception as exc:
+            error_text = str(exc).lower()
+            status_code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+            retryable = (
+                status_code in (429, 500, 502, 503, 504)
+                or "service_unavailable" in error_text
+                or "temporarily overloaded" in error_text
+                or "resource_exhausted" in error_text
+                or "rate limit" in error_text
+                or "503" in error_text
+                or "429" in error_text
+            )
+            if not retryable or attempt == max_attempts - 1:
+                if retryable:
+                    raise RuntimeError(
+                        f"Gemini model '{model}' remained temporarily unavailable after "
+                        f"{max_attempts} attempts. Please wait a minute and try again. Original error: {exc}"
+                    ) from exc
+                raise
+            delay = (2 ** attempt) + random.uniform(0, 0.5)
+            time.sleep(delay)
+
+    raise RuntimeError("Gemini request failed after retries.")
 
 
 def run_stage(
@@ -224,10 +256,23 @@ if generate:
         st.session_state["study_pack_field"] = field.strip()
         st.success("Your study pack is ready.")
     except Exception as exc:
-        st.error(
-            "The workflow could not finish. Check your Google AI Studio API key, "
-            "Gemini model name, internet connection, and API quota, then try again."
-        )
+        error_text = str(exc).lower()
+        if "503" in error_text or "service_unavailable" in error_text or "temporarily unavailable" in error_text or "temporarily overloaded" in error_text:
+            st.error(
+                "Google Gemini is temporarily busy. The app automatically retried the request, "
+                "but the model stayed unavailable. Wait a minute or two and try again; "
+                "this error does not usually mean your API key is wrong."
+            )
+        elif "429" in error_text or "resource_exhausted" in error_text or "quota" in error_text:
+            st.error(
+                "The Gemini API rate limit or quota was reached. Wait for the limit to reset, "
+                "or check your project quota in Google AI Studio."
+            )
+        else:
+            st.error(
+                "The workflow could not finish. Check your Google AI Studio API key, "
+                "Gemini model name, internet connection, and API quota, then try again."
+            )
         with st.expander("Technical details"):
             st.code(str(exc))
 
