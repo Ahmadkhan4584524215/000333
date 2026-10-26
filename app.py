@@ -245,7 +245,7 @@ if generate:
         "learning_style": learning_style,
         "include_resource_suggestions": include_resources,
     }
-    model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+    model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
     try:
         client = genai.Client(api_key=api_key)
