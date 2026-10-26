@@ -190,8 +190,8 @@ if generate:
         "learning_style": learning_style,
         "include_resource_suggestions": include_resources,
     }
-    model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-    model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+   
+   model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
     try:
         client = Groq(api_key=api_key)
